@@ -375,10 +375,9 @@ if st.button("👑 Execute Sourcing & Hybrid Matching Engine"):
                 # Execute gated ranker logic
                 results = rank_candidates(jd_emb, candidate_embs, candidate_metadatas, jd_metadata)
                 
-                # Retrieve processing logs for successful runs using dictionary lookup
-                profile_by_name = {p["name"]: p for p in valid_profiles}
+                # Retrieve processing logs for successful runs using direct candidate_index lookup
                 for res in results:
-                    p = profile_by_name[res["name"]]
+                    p = valid_profiles[res["candidate_index"]]
                     res["parse_method"] = p["parse_method"]
                     res["nlp_mode"] = p["nlp_mode"]
                     res["processing_time_sec"] = p["elapsed_sec"]

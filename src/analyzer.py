@@ -215,7 +215,7 @@ def extract_experience(text):
 def extract_name(text):
     """
     Extracts candidate name from the first non-empty line of text.
-    Filters out common section headers and ensures it looks like a candidate name.
+    Filters out common section headers, cleans prefixes, and ensures it is not an invalid keyword.
     """
     lines = text.split('\n')
     for line in lines:
@@ -223,13 +223,20 @@ def extract_name(text):
         if stripped:
             lower_line = stripped.lower()
             is_heading = any(h in lower_line for h in ["summary", "profile", "experience", "education", "skills", "objective", "contact", "email", "phone"])
-            if not is_heading and len(stripped) < 50 and len(stripped.split()) >= 2:
-                # Basic check: should be mostly alphabetic words
-                words = stripped.split()
-                # If it looks like a title/name (capitalized first letters)
-                if all(w[0].isupper() or not w.isalpha() for w in words if w):
-                    return stripped
-                return stripped
+            if not is_heading and len(stripped) < 60 and len(stripped.split()) >= 2:
+                # Clean prefix patterns like "Name:", "Candidate Name:"
+                prefix_pattern = r'^(?:name|candidate|candidate name|cv|resume|curriculum vitae)\s*[:\-]\s*'
+                name_candidate = re.sub(prefix_pattern, '', stripped, flags=re.IGNORECASE).strip()
+                
+                # Remove leading/trailing symbols
+                name_candidate = re.sub(r'^[\s\-:*•●]+|[\s\-:*•●]+$', '', name_candidate).strip()
+                
+                # Reject invalid names
+                invalid_names = {"curriculum vitae", "resume", "cv", "portfolio", "biodata", "cover letter"}
+                if name_candidate.lower() in invalid_names or len(name_candidate.split()) < 2:
+                    continue
+                
+                return name_candidate
     return "Unknown Candidate"
 
 def check_is_resume(text, skills, experience, email, phone):
@@ -237,31 +244,66 @@ def check_is_resume(text, skills, experience, email, phone):
     Heuristic check to determine if the document behaves like a valid resume.
     """
     text_lower = text.lower()
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
     
     # 1. Word count threshold (Resumes are rarely under 40 words)
     words = re.findall(r'\b\w+\b', text_lower)
     if len(words) < 40:
         return False, f"Document is too short to be a valid resume ({len(words)} words found, minimum is 40)."
         
-    # 2. Key section headings / indicator words commonly found in resumes
-    resume_indicators = [
-        "experience", "education", "skills", "employment", "work", "project", 
-        "summary", "history", "academic", "profile", "career", "contact", 
-        "qualification", "certification", "achievement", "objective", "publication",
-        "internship", "volunteer", "job", "developer", "engineer", "designer", "manager"
+    # 2. Check for code syntax to filter out programming scripts
+    code_indicators = [
+        r'^\s*import\s+\w+',
+        r'^\s*from\s+\w+\s+import',
+        r'^\s*def\s+\w+\s*\(',
+        r'^\s*class\s+\w+\s*[\(:]',
+        r'#\s*type:\s*\w+',
+        r'if\s+__name__\s*==\s*[\'"]__main__[\'"]'
     ]
-    
-    matched_indicators = [kw for kw in resume_indicators if re.search(r'\b' + re.escape(kw) + r'\b', text_lower)]
-    
-    # 3. If there is absolutely no overlap with resume terminology
-    if not matched_indicators:
-        return False, "Document does not contain any standard resume section markers or terminology."
+    code_line_matches = 0
+    for line in lines:
+        if any(re.match(pat, line) for pat in code_indicators):
+            code_line_matches += 1
+            
+    if code_line_matches >= 3 or (len(lines) > 0 and code_line_matches / len(lines) > 0.15):
+        return False, "Document matches source code structure (contains python import/class/function definitions)."
         
-    # 4. If there are no skills, no experience, no email, and no phone:
-    # Check if there are enough indicator words. If less than 2 indicators, flag as invalid.
+    # 3. Check for JSON / XML / HTML structures
+    if text_lower.startswith("{") and text_lower.endswith("}"):
+        return False, "Document appears to be a raw JSON structure, not a resume."
+    if text_lower.startswith("<html") or text_lower.startswith("<!doctype html"):
+        return False, "Document appears to be HTML source code, not a resume."
+        
+    # 4. Check for key resume sections
+    section_patterns = {
+        "education": [r'\beducation\b', r'\bacademic\b', r'\buniversity\b', r'\bcollege\b', r'\bdegree\b'],
+        "experience": [r'\bexperience\b', r'\bwork\b', r'\bemployment\b', r'\bhistory\b', r'\bprofessional\b'],
+        "skills": [r'\bskills\b', r'\btechnologies\b', r'\btools\b', r'\bexpertise\b'],
+        "projects": [r'\bprojects\b', r'\bpublications\b', r'\baccomplishments\b']
+    }
+    
+    found_sections = set()
+    for sec, patterns in section_patterns.items():
+        for pat in patterns:
+            if re.search(pat, text_lower):
+                found_sections.add(sec)
+                break
+                
+    # If the document has none of the standard resume section terms
+    if len(found_sections) < 2:
+        resume_indicators = [
+            "experience", "education", "skills", "employment", "work", "project", 
+            "summary", "history", "academic", "profile", "career", "contact", 
+            "qualification", "certification", "achievement", "objective", "publication",
+            "internship", "volunteer", "job", "developer", "engineer", "designer", "manager"
+        ]
+        matched_indicators = [kw for kw in resume_indicators if re.search(r'\b' + re.escape(kw) + r'\b', text_lower)]
+        if len(matched_indicators) < 3:
+            return False, "Document lacks standard resume section markers and vocabulary."
+            
+    # 5. Check for contact info and profile details
     if not email and not phone and not skills and experience == 0:
-        if len(matched_indicators) < 2:
-            return False, "Lacks contact details, skill tags, experience details, and standard resume headers."
+        return False, "Lacks contact details (email/phone), skill tags, experience details, and standard resume headers."
             
     return True, ""
 
