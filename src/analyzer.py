@@ -212,12 +212,66 @@ def extract_experience(text):
             
     return 0
 
+def extract_name(text):
+    """
+    Extracts candidate name from the first non-empty line of text.
+    Filters out common section headers and ensures it looks like a candidate name.
+    """
+    lines = text.split('\n')
+    for line in lines:
+        stripped = line.strip()
+        if stripped:
+            lower_line = stripped.lower()
+            is_heading = any(h in lower_line for h in ["summary", "profile", "experience", "education", "skills", "objective", "contact", "email", "phone"])
+            if not is_heading and len(stripped) < 50 and len(stripped.split()) >= 2:
+                # Basic check: should be mostly alphabetic words
+                words = stripped.split()
+                # If it looks like a title/name (capitalized first letters)
+                if all(w[0].isupper() or not w.isalpha() for w in words if w):
+                    return stripped
+                return stripped
+    return "Unknown Candidate"
+
+def check_is_resume(text, skills, experience, email, phone):
+    """
+    Heuristic check to determine if the document behaves like a valid resume.
+    """
+    text_lower = text.lower()
+    
+    # 1. Word count threshold (Resumes are rarely under 40 words)
+    words = re.findall(r'\b\w+\b', text_lower)
+    if len(words) < 40:
+        return False, f"Document is too short to be a valid resume ({len(words)} words found, minimum is 40)."
+        
+    # 2. Key section headings / indicator words commonly found in resumes
+    resume_indicators = [
+        "experience", "education", "skills", "employment", "work", "project", 
+        "summary", "history", "academic", "profile", "career", "contact", 
+        "qualification", "certification", "achievement", "objective", "publication",
+        "internship", "volunteer", "job", "developer", "engineer", "designer", "manager"
+    ]
+    
+    matched_indicators = [kw for kw in resume_indicators if re.search(r'\b' + re.escape(kw) + r'\b', text_lower)]
+    
+    # 3. If there is absolutely no overlap with resume terminology
+    if not matched_indicators:
+        return False, "Document does not contain any standard resume section markers or terminology."
+        
+    # 4. If there are no skills, no experience, no email, and no phone:
+    # Check if there are enough indicator words. If less than 2 indicators, flag as invalid.
+    if not email and not phone and not skills and experience == 0:
+        if len(matched_indicators) < 2:
+            return False, "Lacks contact details, skill tags, experience details, and standard resume headers."
+            
+    return True, ""
+
 def extract_metadata(text):
     return {
         "email": extract_email(text),
         "phone": extract_phone(text),
         "skills": extract_skills(text),
-        "experience": extract_experience(text)
+        "experience": extract_experience(text),
+        "candidate_name": extract_name(text)
     }
 
 def analyze_candidate(raw_text, jd_text):
@@ -252,5 +306,12 @@ def analyze_candidate(raw_text, jd_text):
     meta["missing_skills"] = missing_skills
     meta["total_jd_skills_count"] = len(jd_skills)
     meta["skill_match_ratio"] = len(matched_skills) / len(jd_skills) if jd_skills else 1.0
+    
+    # 6. Resume Validation Check
+    is_resume, resume_validation_reason = check_is_resume(
+        raw_text, meta["skills"], meta["experience"], meta["email"], meta["phone"]
+    )
+    meta["is_resume"] = is_resume
+    meta["resume_validation_reason"] = resume_validation_reason
     
     return cleaned_text, meta, nlp_mode, padding_flag, flagged_keywords

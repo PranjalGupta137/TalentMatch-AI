@@ -200,7 +200,7 @@ if 'embedder' not in st.session_state:
 with st.sidebar:
     st.markdown('<div class="sidebar-header">🛡️ Enterprise Security Settings</div>', unsafe_allow_html=True)
     
-    anonymize_view = st.toggle("Anonymized Sourcing View", value=True,
+    anonymize_view = st.toggle("Anonymized Sourcing View", value=False,
                                help="Hides candidate names and contact data from expanded profile views to ensure absolute technical objectivity.")
     
     st.markdown('<div class="sidebar-header">⚙️ System Configurations</div>', unsafe_allow_html=True)
@@ -358,7 +358,7 @@ if st.button("👑 Execute Sourcing & Hybrid Matching Engine"):
                 candidate_metadatas = []
                 for idx, profile in enumerate(valid_profiles):
                     meta = {
-                        "name": profile["name"],
+                        "name": profile["metadata"].get("candidate_name", profile["name"]),
                         "email": profile["metadata"].get("email", "N/A"),
                         "phone": profile["metadata"].get("phone", "N/A"),
                         "skills": list(profile["metadata"].get("skills", [])),
@@ -366,7 +366,9 @@ if st.button("👑 Execute Sourcing & Hybrid Matching Engine"):
                         "matched_skills": list(profile["metadata"].get("matched_skills", [])),
                         "missing_skills": list(profile["metadata"].get("missing_skills", [])),
                         "padding_penalty_applied": profile["padding_penalty_applied"],
-                        "flagged_keywords": list(profile["flagged_keywords"])
+                        "flagged_keywords": list(profile["flagged_keywords"]),
+                        "is_resume": profile["metadata"].get("is_resume", True),
+                        "resume_validation_reason": profile["metadata"].get("resume_validation_reason", "")
                     }
                     candidate_metadatas.append(meta)
                 
@@ -483,7 +485,9 @@ if st.session_state.pipeline_run and st.session_state.results:
         expander_title = f"Rank #{rank+1} | {candidate_label} | Match Score: {score_percentage}"
         
         # Add warning visual icon if security penalty applied or gated mismatch occurred
-        if res["padding_penalty_applied"]:
+        if not res.get("is_resume", True):
+            expander_title += " ❌ [Not a Resume]"
+        elif res["padding_penalty_applied"]:
             expander_title += " ⚠️ [Security Warning]"
         elif res["is_gated"]:
             expander_title += " ❌ [Core Mismatch]"
@@ -512,7 +516,9 @@ if st.session_state.pipeline_run and st.session_state.results:
                 else:
                     st.success("✅ Padding Density Monitor: Safe")
                     
-                if res["is_gated"]:
+                if not res.get("is_resume", True):
+                    st.error(f"❌ Resume Validity Check: FAILED ({res.get('resume_validation_reason')})")
+                elif res["is_gated"]:
                     st.error("❌ Mismatched Core Technical Profile Gate applied.")
                 else:
                     st.success("✅ Base Semantic Alignment Gate passed.")

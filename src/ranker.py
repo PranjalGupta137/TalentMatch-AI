@@ -58,12 +58,15 @@ def get_similarity_score(vec1, vec2):
         logger.error(f"Manhattan similarity failed: {str(e)}")
         raise RuntimeError(f"All similarity computations failed: {str(e)}")
 
-def generate_feedback(base_score, skill_ratio, exp_weight, matched_skills, missing_skills, cand_exp, req_exp, is_gated, padding_penalty, flagged_kws):
+def generate_feedback(base_score, skill_ratio, exp_weight, matched_skills, missing_skills, cand_exp, req_exp, is_gated, padding_penalty, flagged_kws, is_resume=True, resume_validation_reason=""):
     """Generates detailed explainable feedback including security warnings and threshold gates."""
     reasons = []
     
+    # 0. Resume Validity Alert
+    if not is_resume:
+        reasons.append(f"INVALID DOCUMENT: This file is not recognized as a valid professional resume. ({resume_validation_reason}) Match score forced to 0%.")
     # 1. Gated Mismatch Alert
-    if is_gated:
+    elif is_gated:
         reasons.append(f"Mismatched Core Technical Profile: Base semantic alignment is too low ({base_score:.3f}). Skill and experience weights revoked.")
     else:
         # Semantic evaluation
@@ -122,10 +125,17 @@ def rank_candidates(jd_embedding, candidate_embeddings, candidate_metadatas, jd_
         # Experience Weight
         cand_exp = cand_meta.get("experience", 0)
         
-        # Check Gate Threshold
-        is_gated = base_score < 0.45
+        is_resume = cand_meta.get("is_resume", True)
+        resume_validation_reason = cand_meta.get("resume_validation_reason", "")
         
-        if is_gated:
+        # Check Gate Threshold
+        is_gated = (base_score < 0.45) or (not is_resume)
+        
+        if not is_resume:
+            skill_ratio = 0.0
+            exp_weight = 0.0
+            final_score = 0.0
+        elif is_gated:
             skill_ratio = 0.0
             exp_weight = 0.0
             # Force linear weights to 0, score depends solely on 0.60 * similarity
@@ -151,7 +161,8 @@ def rank_candidates(jd_embedding, candidate_embeddings, candidate_metadatas, jd_
         feedback = generate_feedback(
             base_score, skill_ratio, exp_weight, 
             matched_skills, missing_skills, cand_exp, required_exp, 
-            is_gated, padding_penalty, flagged_kws
+            is_gated, padding_penalty, flagged_kws,
+            is_resume=is_resume, resume_validation_reason=resume_validation_reason
         )
         
         ranked_list.append({
@@ -167,6 +178,8 @@ def rank_candidates(jd_embedding, candidate_embeddings, candidate_metadatas, jd_
             "matched_skills": matched_skills,
             "missing_skills": missing_skills,
             "is_gated": is_gated,
+            "is_resume": is_resume,
+            "resume_validation_reason": resume_validation_reason,
             "padding_penalty_applied": padding_penalty,
             "flagged_keywords": flagged_kws,
             "feedback": feedback,
@@ -185,7 +198,9 @@ def generate_explainable_dataframe(ranked_results):
     data = []
     for rank, res in enumerate(ranked_results):
         status = "NORMAL"
-        if res["is_gated"]:
+        if not res.get("is_resume", True):
+            status = "INVALID (NOT A RESUME)"
+        elif res["is_gated"]:
             status = "MISMATCHED (GATED)"
         elif res["padding_penalty_applied"]:
             status = "PENALIZED (-25%)"
