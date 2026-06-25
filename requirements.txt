@@ -1,0 +1,12 @@
+streamlit
+pymupdf
+python-docx
+pdfplumber
+pypdf
+pytesseract
+nltk
+sentence-transformers
+scikit-learn
+numpy
+pandas
+pillow

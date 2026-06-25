@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+*.log
+
+# Streamlit
+.streamlit/secrets.toml
+.streamlit/config.toml
+
+# Project Data (Avoid uploading candidate resumes or Job Descriptions)
+data/resumes/*
+!data/resumes/.gitkeep
+data/job_descriptions.txt
+
+# OS
+.DS_Store
+Thumbs.db
