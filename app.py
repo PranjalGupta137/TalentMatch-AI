@@ -357,24 +357,30 @@ if st.button("👑 Execute Sourcing & Hybrid Matching Engine"):
                 # Prepare metadata for gated ranker
                 candidate_metadatas = []
                 for idx, profile in enumerate(valid_profiles):
-                    meta = profile["metadata"]
-                    meta["name"] = profile["name"]
-                    meta["email"] = profile["metadata"]["email"]
-                    meta["phone"] = profile["metadata"]["phone"]
-                    meta["padding_penalty_applied"] = profile["padding_penalty_applied"]
-                    meta["flagged_keywords"] = profile["flagged_keywords"]
+                    meta = {
+                        "name": profile["name"],
+                        "email": profile["metadata"].get("email", "N/A"),
+                        "phone": profile["metadata"].get("phone", "N/A"),
+                        "skills": list(profile["metadata"].get("skills", [])),
+                        "experience": profile["metadata"].get("experience", 0),
+                        "matched_skills": list(profile["metadata"].get("matched_skills", [])),
+                        "missing_skills": list(profile["metadata"].get("missing_skills", [])),
+                        "padding_penalty_applied": profile["padding_penalty_applied"],
+                        "flagged_keywords": list(profile["flagged_keywords"])
+                    }
                     candidate_metadatas.append(meta)
                 
                 # Execute gated ranker logic
                 results = rank_candidates(jd_emb, candidate_embs, candidate_metadatas, jd_metadata)
                 
-                # Retrieve processing logs for successful runs
+                # Retrieve processing logs for successful runs using dictionary lookup
+                profile_by_name = {p["name"]: p for p in valid_profiles}
                 for res in results:
-                    profile_index = next(i for i, p in enumerate(valid_profiles) if p["name"] == res["name"])
-                    res["parse_method"] = valid_profiles[profile_index]["parse_method"]
-                    res["nlp_mode"] = valid_profiles[profile_index]["nlp_mode"]
-                    res["processing_time_sec"] = valid_profiles[profile_index]["elapsed_sec"]
-                    res["raw_text"] = valid_profiles[profile_index]["raw_text"]
+                    p = profile_by_name[res["name"]]
+                    res["parse_method"] = p["parse_method"]
+                    res["nlp_mode"] = p["nlp_mode"]
+                    res["processing_time_sec"] = p["elapsed_sec"]
+                    res["raw_text"] = p["raw_text"]
                     res["embed_mode"] = embed_mode
                 
                 # Save session results
@@ -547,3 +553,12 @@ if st.session_state.pipeline_run and st.session_state.results:
                 height=150,
                 key=f"raw_text_{rank}"
             )
+            
+    with st.expander("🐞 System Debug logs (Raw JSON Results)"):
+        debug_results = []
+        for r in results:
+            debug_copy = r.copy()
+            if "raw_text" in debug_copy:
+                del debug_copy["raw_text"]
+            debug_results.append(debug_copy)
+        st.json(debug_results)
