@@ -5,12 +5,200 @@ import time
 import logging
 import concurrent.futures
 import gc  # Garbage Collection
+import io
+from fpdf import FPDF
 
 # Import pipeline components
 from src.parser import extract_text
 from src.analyzer import clean_text, extract_metadata, analyze_candidate
 from src.embedder import DocumentEmbedder
 from src.ranker import rank_candidates, generate_explainable_dataframe
+
+# Helper classes and functions for exporting reports
+def clean_pdf_text(text):
+    if not text:
+        return ""
+    # Replace common Unicode characters with ASCII equivalents
+    replacements = {
+        "\u2018": "'", "\u2019": "'",  # curly single quotes
+        "\u201c": '"', "\u201d": '"',  # curly double quotes
+        "\u2014": "-", "\u2013": "-",  # em/en dashes
+        "\u2022": "-", "\u00b7": "-",  # bullets
+        "\u2192": "->",                # arrows
+        "\u00ae": "(R)", "\u00a9": "(C)",
+    }
+    cleaned = text
+    for uni_char, ascii_char in replacements.items():
+        cleaned = cleaned.replace(uni_char, ascii_char)
+    # Encode to latin-1 and ignore unknown characters to prevent FPDF crashes
+    return cleaned.encode('latin-1', errors='replace').decode('latin-1')
+
+class TalentMatchPDF(FPDF):
+    def header(self):
+        # Top banner decoration
+        self.set_fill_color(79, 70, 229) # Premium Indigo color
+        self.rect(0, 0, 210, 10, 'F')
+        
+        self.ln(5)
+        self.set_font('Helvetica', 'B', 16)
+        self.set_text_color(31, 41, 55) # Dark gray text
+        self.cell(0, 10, 'TalentMatch AI Evaluation Report', 0, 1, 'L')
+        self.set_font('Helvetica', 'I', 9)
+        self.set_text_color(107, 114, 128)
+        self.cell(0, 5, 'Enterprise Sourcing & Discovery Hub | Gated Semantic Evaluation', 0, 1, 'L')
+        self.ln(5)
+        self.set_draw_color(229, 231, 235) # Light gray divider
+        self.line(10, self.get_y(), 200, self.get_y())
+        self.ln(5)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Helvetica', 'I', 8)
+        self.set_text_color(156, 163, 175)
+        self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+
+def generate_pdf_report(results, jd_text):
+    pdf = TalentMatchPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    
+    # JD info summary
+    pdf.set_font('Helvetica', 'B', 11)
+    pdf.set_text_color(79, 70, 229)
+    pdf.cell(0, 6, 'Target Job Requirements Summary:', 0, 1, 'L')
+    
+    pdf.set_font('Helvetica', '', 9)
+    pdf.set_text_color(55, 65, 81)
+    jd_summary = (jd_text[:300] + "...") if len(jd_text) > 300 else jd_text
+    pdf.multi_cell(0, 5, clean_pdf_text(jd_summary.strip()))
+    pdf.ln(5)
+    
+    # Leaderboard title
+    pdf.set_font('Helvetica', 'B', 12)
+    pdf.set_text_color(31, 41, 55)
+    pdf.cell(0, 6, 'Gated Candidate Leaderboard:', 0, 1, 'L')
+    pdf.ln(2)
+    
+    # Table Header
+    pdf.set_font('Helvetica', 'B', 8)
+    pdf.set_fill_color(243, 244, 246) # Light gray fill
+    pdf.set_text_color(55, 65, 81)
+    
+    # Col widths
+    widths = [10, 45, 20, 20, 15, 35, 45]
+    headers = ["Rank", "Candidate Name", "Match %", "Base Score", "Exp (Yrs)", "Security Status", "Contact (Email)"]
+    
+    for w, h in zip(widths, headers):
+        pdf.cell(w, 8, h, 1, 0, 'C', True)
+    pdf.ln(8)
+    
+    # Table Rows
+    pdf.set_font('Helvetica', '', 8)
+    pdf.set_text_color(75, 85, 99)
+    
+    for rank, res in enumerate(results):
+        status = "NORMAL"
+        if not res.get("is_resume", True):
+            status = "INVALID"
+        elif res["is_gated"]:
+            status = "GATED"
+        elif res["padding_penalty_applied"]:
+            status = "PENALIZED"
+            
+        pdf.cell(widths[0], 7, str(rank + 1), 1, 0, 'C')
+        pdf.cell(widths[1], 7, clean_pdf_text(res["name"][:24]), 1, 0, 'L')
+        pdf.cell(widths[2], 7, clean_pdf_text(res["match_percentage"]), 1, 0, 'C')
+        pdf.cell(widths[3], 7, f"{res['base_score']:.3f}", 1, 0, 'C')
+        pdf.cell(widths[4], 7, f"{res['experience']} yrs", 1, 0, 'C')
+        
+        # Color code security status cell
+        if status == "INVALID":
+            pdf.set_text_color(220, 38, 38) # Red
+        elif status == "GATED":
+            pdf.set_text_color(245, 158, 11) # Orange
+        else:
+            pdf.set_text_color(75, 85, 99)
+            
+        pdf.cell(widths[5], 7, status, 1, 0, 'C')
+        pdf.set_text_color(75, 85, 99)
+        pdf.cell(widths[6], 7, clean_pdf_text(res["email"][:25]), 1, 1, 'L')
+        
+    pdf.ln(8)
+    
+    # Detailed candidate pages
+    pdf.set_font('Helvetica', 'B', 12)
+    pdf.cell(0, 6, 'Detailed Candidate Evaluations:', 0, 1, 'L')
+    pdf.ln(3)
+    
+    for rank, res in enumerate(results):
+        pdf.set_font('Helvetica', 'B', 10)
+        pdf.set_text_color(79, 70, 229)
+        pdf.cell(0, 6, clean_pdf_text(f'#{rank + 1} - {res["name"]} (Match Score: {res["match_percentage"]})'), 0, 1, 'L')
+        
+        pdf.set_font('Helvetica', '', 9)
+        pdf.set_text_color(55, 65, 81)
+        pdf.cell(50, 5, clean_pdf_text(f'Email: {res["email"]}'), 0, 0, 'L')
+        pdf.cell(50, 5, clean_pdf_text(f'Phone: {res["phone"]}'), 0, 0, 'L')
+        pdf.cell(50, 5, clean_pdf_text(f'Experience: {res["experience"]} years'), 0, 1, 'L')
+        
+        # Skills
+        pdf.set_font('Helvetica', 'B', 8)
+        pdf.cell(0, 4, 'Matched Stack:', 0, 1, 'L')
+        pdf.set_font('Helvetica', '', 8)
+        matched_str = ", ".join(res["matched_skills"]) if res["matched_skills"] else "None"
+        pdf.multi_cell(190, 4, clean_pdf_text(matched_str))
+        pdf.ln(1)
+        
+        pdf.set_font('Helvetica', 'B', 8)
+        pdf.cell(0, 4, 'Missing Stack:', 0, 1, 'L')
+        pdf.set_font('Helvetica', '', 8)
+        missing_str = ", ".join(res["missing_skills"]) if res["missing_skills"] else "Perfect Tech-Stack Match!"
+        pdf.multi_cell(190, 4, clean_pdf_text(missing_str))
+        pdf.ln(1)
+        
+        pdf.set_font('Helvetica', 'B', 8)
+        pdf.cell(0, 4, 'Evaluation Feedback:', 0, 1, 'L')
+        pdf.set_font('Helvetica', 'I', 8)
+        pdf.set_text_color(107, 114, 128)
+        pdf.multi_cell(190, 4, clean_pdf_text(res["feedback"]))
+        pdf.set_text_color(55, 65, 81)
+        
+        pdf.ln(4)
+        pdf.set_draw_color(243, 244, 246)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(4)
+        
+    return bytes(pdf.output())
+
+def generate_excel_report(results):
+    buffer = io.BytesIO()
+    excel_data = []
+    for rank, res in enumerate(results):
+        status = "NORMAL"
+        if not res.get("is_resume", True):
+            status = "INVALID (NOT A RESUME)"
+        elif res["is_gated"]:
+            status = "MISMATCHED (GATED)"
+        elif res["padding_penalty_applied"]:
+            status = "PENALIZED (-25%)"
+            
+        excel_data.append({
+            "Rank": rank + 1,
+            "Candidate Name": res["name"],
+            "Match Score (%)": res["match_percentage"],
+            "Base Semantic Score": round(res["base_score"], 3),
+            "Experience (Yrs)": res["experience"],
+            "Email": res["email"],
+            "Phone": res["phone"],
+            "Security Status": status,
+            "Matched Skills": ", ".join(res["matched_skills"]),
+            "Missing Skills": ", ".join(res["missing_skills"]),
+            "Feedback": res["feedback"]
+        })
+    df = pd.DataFrame(excel_data)
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name="Leaderboard")
+    return buffer.getvalue()
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -452,6 +640,35 @@ if st.session_state.pipeline_run and st.session_state.results:
         else:
             st.dataframe(explain_df, use_container_width=True, hide_index=True)
             
+        # Add Excel and PDF download option section
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<h5>📥 Export discovery Results</h5>", unsafe_allow_html=True)
+        export_col1, export_col2 = st.columns(2)
+        with export_col1:
+            try:
+                excel_bytes = generate_excel_report(results)
+                st.download_button(
+                    label="📊 Download Excel Report",
+                    data=excel_bytes,
+                    file_name="TalentMatch_Leaderboard_Report.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"Failed to generate Excel: {str(e)}")
+        with export_col2:
+            try:
+                pdf_bytes = generate_pdf_report(results, jd_text)
+                st.download_button(
+                    label="📄 Download PDF Report",
+                    data=pdf_bytes,
+                    file_name="TalentMatch_Evaluation_Report.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"Failed to generate PDF: {str(e)}")
+            
         st.markdown('</div>', unsafe_allow_html=True)
         
     with dash_col2:
@@ -530,24 +747,25 @@ if st.session_state.pipeline_run and st.session_state.results:
                 st.markdown("##### 🧠 Explanatory Match Feedback")
                 st.info(f"💡 {res['feedback']}")
                 
+                if res["is_gated"] and res.get("is_resume", True):
+                    st.warning("⚠️ Note: Skill and experience weights were not added to final score due to gated semantic alignment mismatch (<0.45 similarity).")
+                
                 st.markdown("##### 🔑 Skill Alignment Badges")
                 
                 # Matched Skills
-                if not res["is_gated"] and res["matched_skills"]:
+                if res["matched_skills"]:
                     st.write("**Matched Stack:**")
                     matched_html = "".join([f'<span class="badge-matched">{s}</span>' for s in res["matched_skills"]])
                     st.markdown(matched_html, unsafe_allow_html=True)
-                elif res["is_gated"]:
-                    st.caption("Skills matching rewards revoked due to gated core technical profile mismatch.")
                 else:
                     st.caption("No overlapping skills matched.")
                     
                 # Missing Skills Gaps
-                if not res["is_gated"] and res["missing_skills"]:
+                if res["missing_skills"]:
                     st.write("**Gaps Detected:**")
                     gap_html = "".join([f'<span class="badge-gap">{s}</span>' for s in res["missing_skills"]])
                     st.markdown(gap_html, unsafe_allow_html=True)
-                elif not res["is_gated"]:
+                else:
                     st.success("✅ Perfect tech-stack coverage. No skill gaps identified!")
                     
             st.divider()
