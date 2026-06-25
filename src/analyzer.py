@@ -153,9 +153,25 @@ def extract_email(text):
     return match.group(0) if match else None
 
 def extract_phone(text):
-    phone_pattern = r'(?:(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}|\+?\d{10,13})'
-    match = re.search(phone_pattern, text)
-    return match.group(0).strip() if match else None
+    # Try different regex patterns for flexibility (spaces, dashes, country codes)
+    patterns = [
+        # Country code + 10 digits split as 5-5 (e.g. +91 98765 43210)
+        r'(?:\+?\d{1,3}[-.\s]?)?\b\d{5}[-.\s]?\d{5}\b',
+        # US/Standard format (e.g. 123-456-7890, (123) 456-7890)
+        r'(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}',
+        # Continuous 10 to 13 digits with optional plus
+        r'\+?\d{10,13}',
+        # Generic phone with spaces/dashes (e.g. +91-987-654-3210)
+        r'\+?\d{1,4}[-.\s]?\d{3,4}[-.\s]?\d{3,4}[-.\s]?\d{3,4}'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            phone_str = match.group(0).strip()
+            digit_count = sum(c.isdigit() for c in phone_str)
+            if 7 <= digit_count <= 15:
+                return phone_str
+    return None
 
 def extract_skills(text):
     found_skills = []
@@ -214,29 +230,61 @@ def extract_experience(text):
 
 def extract_name(text):
     """
-    Extracts candidate name from the first non-empty line of text.
-    Filters out common section headers, cleans prefixes, and ensures it is not an invalid keyword.
+    Robust candidate name extraction.
+    Scans the first 12 non-empty lines, cleans name prefix labels (e.g. 'Name:'),
+    skips lines containing colons, digits, emails/web links, or resume headings,
+    and isolates proper noun structures.
     """
     lines = text.split('\n')
-    for line in lines:
-        stripped = line.strip()
-        if stripped:
-            lower_line = stripped.lower()
-            is_heading = any(h in lower_line for h in ["summary", "profile", "experience", "education", "skills", "objective", "contact", "email", "phone"])
-            if not is_heading and len(stripped) < 60 and len(stripped.split()) >= 2:
-                # Clean prefix patterns like "Name:", "Candidate Name:"
-                prefix_pattern = r'^(?:name|candidate|candidate name|cv|resume|curriculum vitae)\s*[:\-]\s*'
-                name_candidate = re.sub(prefix_pattern, '', stripped, flags=re.IGNORECASE).strip()
-                
-                # Remove leading/trailing symbols
-                name_candidate = re.sub(r'^[\s\-:*•●]+|[\s\-:*•●]+$', '', name_candidate).strip()
-                
-                # Reject invalid names
-                invalid_names = {"curriculum vitae", "resume", "cv", "portfolio", "biodata", "cover letter"}
-                if name_candidate.lower() in invalid_names or len(name_candidate.split()) < 2:
-                    continue
-                
+    non_empty_lines = [line.strip() for line in lines if line.strip()]
+    
+    for line in non_empty_lines[:12]:
+        # Clean prefix patterns like "Name:", "Candidate Name:"
+        prefix_pattern = r'^(?:name|candidate|candidate name|cv|resume|curriculum vitae)\s*[:\-]\s*'
+        cleaned = re.sub(prefix_pattern, '', line, flags=re.IGNORECASE).strip()
+        cleaned_lower = cleaned.lower()
+        
+        # Skip if line contains numbers (like graduation year, phone, GPA)
+        if any(c.isdigit() for c in cleaned):
+            continue
+            
+        # Skip if it contains email, URL, or typical separators/headers
+        if '@' in cleaned or '/' in cleaned or '\\' in cleaned or '|' in cleaned or ':' in cleaned:
+            continue
+            
+        # Skip common resume headings or noise terms
+        noise_terms = [
+            "summary", "profile", "experience", "education", "skills", "objective", 
+            "contact", "email", "phone", "expected", "graduation", "gpa", "cgpa", 
+            "university", "college", "school", "resume", "cv", "curriculum", "page",
+            "certifications", "projects", "hobbies", "interests", "address", "links",
+            "github", "linkedin", "portfolio", "about", "internship", "professional"
+        ]
+        if any(term in cleaned_lower for term in noise_terms):
+            continue
+            
+        # Check if the line has 2 to 4 words
+        words = cleaned.split()
+        if len(words) >= 2 and len(words) <= 4:
+            # Clean name candidate from trailing punctuation or symbols
+            name_candidate = re.sub(r'^[\s\-:*•●]+|[\s\-:*•●]+$', '', cleaned).strip()
+            
+            # Avoid single letters or non-alphabetic words (allow dot for initials like A. K.)
+            if all(w.replace('.', '').isalpha() for w in words):
                 return name_candidate
+                
+    # Fallback to standard check if no heuristic match
+    for line in non_empty_lines[:5]:
+        lower_line = line.lower()
+        is_heading = any(h in lower_line for h in ["summary", "profile", "experience", "education", "skills", "objective"])
+        if not is_heading and len(line) < 60 and len(line.split()) >= 2:
+            prefix_pattern = r'^(?:name|candidate|candidate name|cv|resume|curriculum vitae)\s*[:\-]\s*'
+            name_candidate = re.sub(prefix_pattern, '', line, flags=re.IGNORECASE).strip()
+            name_candidate = re.sub(r'^[\s\-:*•●]+|[\s\-:*•●]+$', '', name_candidate).strip()
+            invalid_names = {"curriculum vitae", "resume", "cv", "portfolio", "biodata", "cover letter"}
+            if name_candidate.lower() not in invalid_names and len(name_candidate.split()) >= 2:
+                return name_candidate
+                
     return "Unknown Candidate"
 
 def check_is_resume(text, skills, experience, email, phone):

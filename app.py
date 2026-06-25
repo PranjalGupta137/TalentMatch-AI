@@ -97,13 +97,15 @@ def generate_pdf_report(results, jd_text):
     pdf.set_text_color(75, 85, 99)
     
     for rank, res in enumerate(results):
-        status = "NORMAL"
+        status = "Passed Gate"
         if not res.get("is_resume", True):
-            status = "INVALID"
+            status = "Invalid"
         elif res["is_gated"]:
-            status = "GATED"
+            status = "Gated"
         elif res["padding_penalty_applied"]:
-            status = "PENALIZED"
+            status = "Security Flag"
+            
+        email_str = str(res.get("email")) if res.get("email") else "N/A"
             
         pdf.cell(widths[0], 7, str(rank + 1), 1, 0, 'C')
         pdf.cell(widths[1], 7, clean_pdf_text(res["name"][:24]), 1, 0, 'L')
@@ -112,16 +114,16 @@ def generate_pdf_report(results, jd_text):
         pdf.cell(widths[4], 7, f"{res['experience']} yrs", 1, 0, 'C')
         
         # Color code security status cell
-        if status == "INVALID":
+        if status == "Invalid":
             pdf.set_text_color(220, 38, 38) # Red
-        elif status == "GATED":
+        elif status == "Gated":
             pdf.set_text_color(245, 158, 11) # Orange
         else:
             pdf.set_text_color(75, 85, 99)
             
         pdf.cell(widths[5], 7, status, 1, 0, 'C')
         pdf.set_text_color(75, 85, 99)
-        pdf.cell(widths[6], 7, clean_pdf_text(res["email"][:25]), 1, 1, 'L')
+        pdf.cell(widths[6], 7, clean_pdf_text(email_str[:25]), 1, 1, 'L')
         
     pdf.ln(8)
     
@@ -135,10 +137,13 @@ def generate_pdf_report(results, jd_text):
         pdf.set_text_color(79, 70, 229)
         pdf.cell(0, 6, clean_pdf_text(f'#{rank + 1} - {res["name"]} (Match Score: {res["match_percentage"]})'), 0, 1, 'L')
         
+        email_str = str(res.get("email")) if res.get("email") else "N/A"
+        phone_str = str(res.get("phone")) if res.get("phone") else "N/A"
+        
         pdf.set_font('Helvetica', '', 9)
         pdf.set_text_color(55, 65, 81)
-        pdf.cell(50, 5, clean_pdf_text(f'Email: {res["email"]}'), 0, 0, 'L')
-        pdf.cell(50, 5, clean_pdf_text(f'Phone: {res["phone"]}'), 0, 0, 'L')
+        pdf.cell(50, 5, clean_pdf_text(f'Email: {email_str}'), 0, 0, 'L')
+        pdf.cell(50, 5, clean_pdf_text(f'Phone: {phone_str}'), 0, 0, 'L')
         pdf.cell(50, 5, clean_pdf_text(f'Experience: {res["experience"]} years'), 0, 1, 'L')
         
         # Skills
@@ -169,18 +174,18 @@ def generate_pdf_report(results, jd_text):
         pdf.ln(4)
         
     return bytes(pdf.output())
-
+ 
 def generate_excel_report(results):
     buffer = io.BytesIO()
     excel_data = []
     for rank, res in enumerate(results):
-        status = "NORMAL"
+        status = "Passed Gate"
         if not res.get("is_resume", True):
-            status = "INVALID (NOT A RESUME)"
+            status = "Invalid Document"
         elif res["is_gated"]:
-            status = "MISMATCHED (GATED)"
+            status = "Gated (Low Alignment)"
         elif res["padding_penalty_applied"]:
-            status = "PENALIZED (-25%)"
+            status = "Security Flag (Padding)"
             
         excel_data.append({
             "Rank": rank + 1,
@@ -188,8 +193,8 @@ def generate_excel_report(results):
             "Match Score (%)": res["match_percentage"],
             "Base Semantic Score": round(res["base_score"], 3),
             "Experience (Yrs)": res["experience"],
-            "Email": res["email"],
-            "Phone": res["phone"],
+            "Email": res.get("email") if res.get("email") else "N/A",
+            "Phone": res.get("phone") if res.get("phone") else "N/A",
             "Security Status": status,
             "Matched Skills": ", ".join(res["matched_skills"]),
             "Missing Skills": ", ".join(res["missing_skills"]),
@@ -396,6 +401,9 @@ with st.sidebar:
     use_transformer = st.toggle("Enable Local Transformer Model", value=True,
                                 help="Toggle local SentenceTransformer ('all-MiniLM-L6-v2'). If disabled, runs fallback TF-IDF vectorizer.")
     
+    gate_threshold = st.slider("Semantic Alignment Gate Threshold", min_value=0.10, max_value=0.60, value=0.30, step=0.05,
+                               help="The minimum semantic similarity required for the candidate to pass the core qualifications gate. Profiles below this are marked as 'Gated (Low Alignment)'.")
+    
     st.markdown('<div class="sidebar-header">⚡ Thread pool Ingest</div>', unsafe_allow_html=True)
     max_workers = st.slider("Max Concurrent CPU Worker Threads", min_value=2, max_value=16, value=8, step=2)
 
@@ -560,20 +568,13 @@ if st.button("👑 Execute Sourcing & Hybrid Matching Engine"):
                     }
                     candidate_metadatas.append(meta)
                 
-                # Execute gated ranker logic
-                results = rank_candidates(jd_emb, candidate_embs, candidate_metadatas, jd_metadata)
-                
-                # Retrieve processing logs for successful runs using direct candidate_index lookup
-                for res in results:
-                    p = valid_profiles[res["candidate_index"]]
-                    res["parse_method"] = p["parse_method"]
-                    res["nlp_mode"] = p["nlp_mode"]
-                    res["processing_time_sec"] = p["elapsed_sec"]
-                    res["raw_text"] = p["raw_text"]
-                    res["embed_mode"] = embed_mode
-                
-                # Save session results
-                st.session_state.results = results
+                # Save session data for dynamic re-ranking
+                st.session_state.jd_emb = jd_emb
+                st.session_state.candidate_embs = candidate_embs
+                st.session_state.candidate_metadatas = candidate_metadatas
+                st.session_state.jd_metadata = jd_metadata
+                st.session_state.valid_profiles = valid_profiles
+                st.session_state.embed_mode = embed_mode
                 st.session_state.pipeline_run = True
                 
                 # Set Diagnostics
@@ -602,8 +603,25 @@ if st.button("👑 Execute Sourcing & Hybrid Matching Engine"):
             logger.info("Memory cleanup completed: Host garbage collector run.")
 
 # Display Results Dashboard
-if st.session_state.pipeline_run and st.session_state.results:
-    results = st.session_state.results
+if st.session_state.pipeline_run:
+    # Dynamic re-ranking based on current gate_threshold slider
+    results = rank_candidates(
+        st.session_state.jd_emb,
+        st.session_state.candidate_embs,
+        st.session_state.candidate_metadatas,
+        st.session_state.jd_metadata,
+        gate_threshold=gate_threshold
+    )
+    # Restore runtime keys
+    for res in results:
+        p = st.session_state.valid_profiles[res["candidate_index"]]
+        res["parse_method"] = p["parse_method"]
+        res["nlp_mode"] = p["nlp_mode"]
+        res["processing_time_sec"] = p["elapsed_sec"]
+        res["raw_text"] = p["raw_text"]
+        res["embed_mode"] = st.session_state.embed_mode
+        
+    st.session_state.results = results
     diagnostics = st.session_state.diagnostics
     
     # 1. Diagnostic Summary Row
@@ -620,6 +638,85 @@ if st.session_state.pipeline_run and st.session_state.results:
     if diagnostics["failed_list"]:
         st.warning(f"⚠️ Failed to parse: {', '.join(diagnostics['failed_list'])}")
         
+    st.divider()
+
+    # 1.5. Spotlight Podium Cards (Top 3 Matches)
+    st.markdown("### 🏆 Top Talent Matches")
+    top_candidates = results[:3]
+    
+    cols = st.columns(len(top_candidates))
+    for idx, cand in enumerate(top_candidates):
+        with cols[idx]:
+            if idx == 0:
+                border_color = "#fbbf24" # Gold
+                badge_icon = "🥇"
+                rank_name = "Rank 1 (Top Match)"
+            elif idx == 1:
+                border_color = "#9ca3af" # Silver
+                badge_icon = "🥈"
+                rank_name = "Rank 2"
+            else:
+                border_color = "#cd7f32" # Bronze
+                badge_icon = "🥉"
+                rank_name = "Rank 3"
+                
+            rank = idx + 1
+            name_label = f"Candidate_{rank:03d}" if anonymize_view else cand["name"]
+            
+            status_text = "Passed Gate"
+            if not cand["is_resume"]:
+                status_text = "Invalid Document"
+            elif cand["padding_penalty_applied"]:
+                status_text = "Security Flag (Padding)"
+            elif cand["is_gated"]:
+                status_text = "Gated (Low Alignment)"
+                
+            skills_matched = len(cand['matched_skills'])
+            skills_total = len(cand['matched_skills']) + len(cand['missing_skills'])
+            
+            st.markdown(f"""
+            <div style="
+                border: 2px solid {border_color};
+                border-radius: 12px;
+                padding: 15px;
+                background: rgba(17, 24, 39, 0.6);
+                backdrop-filter: blur(8px);
+                margin-bottom: 15px;
+                box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+            ">
+                <div style="font-size: 1.25rem; font-weight: 700; color: #f3f4f6; margin-bottom: 5px;">
+                    {badge_icon} {name_label}
+                </div>
+                <div style="color: {border_color}; font-size: 0.85rem; font-weight: 600; text-transform: uppercase; margin-bottom: 10px;">
+                    {rank_name}
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: #9ca3af; font-size: 0.9rem;">Match Score:</span>
+                    <span style="color: #f3f4f6; font-weight: 700; font-size: 1.1rem;">{cand['match_percentage']}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="color: #9ca3af; font-size: 0.9rem;">Experience:</span>
+                    <span style="color: #f3f4f6; font-weight: 600;">{cand['experience']} Years</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
+                    <span style="color: #9ca3af; font-size: 0.9rem;">Skills Match:</span>
+                    <span style="color: #f3f4f6; font-weight: 600;">{skills_matched} / {skills_total}</span>
+                </div>
+                <div style="
+                    text-align: center;
+                    background: {border_color}1a;
+                    color: {border_color};
+                    padding: 4px;
+                    border-radius: 6px;
+                    font-size: 0.8rem;
+                    font-weight: 700;
+                    border: 1px solid {border_color}33;
+                ">
+                    {status_text.upper()}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
     st.divider()
     
     # 2. Main Dashboard Columns (Leaderboard vs scatter landscape plot)
@@ -748,7 +845,7 @@ if st.session_state.pipeline_run and st.session_state.results:
                 st.info(f"💡 {res['feedback']}")
                 
                 if res["is_gated"] and res.get("is_resume", True):
-                    st.warning("⚠️ Note: Skill and experience weights were not added to final score due to gated semantic alignment mismatch (<0.45 similarity).")
+                    st.warning(f"⚠️ Note: Skill and experience weights were not added to final score due to gated semantic alignment mismatch (<{gate_threshold:.2f} similarity).")
                 
                 st.markdown("##### 🔑 Skill Alignment Badges")
                 
@@ -776,12 +873,3 @@ if st.session_state.pipeline_run and st.session_state.results:
                 height=150,
                 key=f"raw_text_{rank}"
             )
-            
-    with st.expander("🐞 System Debug logs (Raw JSON Results)"):
-        debug_results = []
-        for r in results:
-            debug_copy = r.copy()
-            if "raw_text" in debug_copy:
-                del debug_copy["raw_text"]
-            debug_results.append(debug_copy)
-        st.json(debug_results)
