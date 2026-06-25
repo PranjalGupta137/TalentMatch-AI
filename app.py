@@ -872,10 +872,10 @@ if st.session_state.pipeline_run:
                     st.success("✅ Perfect tech-stack coverage. No skill gaps identified!")
                     
             st.divider()
-            st.markdown("##### 📑 Extracted Raw Document Preview (First 2000 chars)")
+            st.markdown("##### 📑 Extracted Document Text Preview (Scroll to view full resume)")
             st.text_area(
-                "Document Text Stream", 
-                value=res["raw_text"][:2000] + ("..." if len(res["raw_text"]) > 2000 else ""),
-                height=150,
+                "Extracted text used by the semantic matching engine", 
+                value=res["raw_text"],
+                height=250,
                 key=f"raw_text_{rank}"
             )
