@@ -161,6 +161,20 @@ def generate_pdf_report(results, jd_text):
         pdf.multi_cell(190, 4, clean_pdf_text(missing_str))
         pdf.ln(1)
         
+        # Projects evaluation in PDF
+        pdf.set_font('Helvetica', 'B', 8)
+        pdf.cell(0, 4, 'Projects & Complexity:', 0, 1, 'L')
+        pdf.set_font('Helvetica', '', 8)
+        proj_details = res.get("project_details", {})
+        proj_score_pct = f"{res.get('project_score', 0.0) * 100:.1f}%"
+        proj_count = proj_details.get("project_count", 0)
+        proj_skills_str = ", ".join(proj_details.get("integrated_skills", [])) if proj_details.get("integrated_skills") else "None"
+        complexity_val = proj_details.get("complexity_score", 0.0)
+        complexity_str = "High" if complexity_val >= 0.7 else "Medium" if complexity_val >= 0.4 else "Low"
+        proj_summary_str = f"Project Score: {proj_score_pct} | Projects Detected: {proj_count} | Complexity: {complexity_str} | Integrated Stack: {proj_skills_str}"
+        pdf.multi_cell(190, 4, clean_pdf_text(proj_summary_str))
+        pdf.ln(1)
+        
         pdf.set_font('Helvetica', 'B', 8)
         pdf.cell(0, 4, 'Evaluation Feedback:', 0, 1, 'L')
         pdf.set_font('Helvetica', 'I', 8)
@@ -187,6 +201,13 @@ def generate_excel_report(results):
         elif res["padding_penalty_applied"]:
             status = "Security Flag (Padding)"
             
+        proj_details = res.get("project_details", {})
+        proj_score_pct = f"{res.get('project_score', 0.0) * 100:.1f}%"
+        proj_count = proj_details.get("project_count", 0)
+        proj_skills_str = ", ".join(proj_details.get("integrated_skills", [])) if proj_details.get("integrated_skills") else "None"
+        complexity_val = proj_details.get("complexity_score", 0.0)
+        complexity_str = "High" if complexity_val >= 0.7 else "Medium" if complexity_val >= 0.4 else "Low"
+
         excel_data.append({
             "Rank": rank + 1,
             "Candidate Name": res["name"],
@@ -198,6 +219,10 @@ def generate_excel_report(results):
             "Security Status": status,
             "Matched Skills": ", ".join(res["matched_skills"]),
             "Missing Skills": ", ".join(res["missing_skills"]),
+            "Project Score (%)": proj_score_pct,
+            "Projects Count": proj_count,
+            "Project Complexity": complexity_str,
+            "Project Integrated Skills": proj_skills_str,
             "Feedback": res["feedback"]
         })
     df = pd.DataFrame(excel_data)
@@ -564,7 +589,9 @@ if st.button("👑 Execute Sourcing & Hybrid Matching Engine"):
                         "padding_penalty_applied": profile["padding_penalty_applied"],
                         "flagged_keywords": list(profile["flagged_keywords"]),
                         "is_resume": profile["metadata"].get("is_resume", True),
-                        "resume_validation_reason": profile["metadata"].get("resume_validation_reason", "")
+                        "resume_validation_reason": profile["metadata"].get("resume_validation_reason", ""),
+                        "project_score": profile["metadata"].get("project_score", 0.0),
+                        "project_details": profile["metadata"].get("project_details", {})
                     }
                     candidate_metadatas.append(meta)
                 
@@ -704,9 +731,13 @@ if st.session_state.pipeline_run:
                     <span style="color: #9ca3af; font-size: 0.9rem;">Experience:</span>
                     <span style="color: #f3f4f6; font-weight: 600;">{cand['experience']} Years</span>
                 </div>
-                <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
                     <span style="color: #9ca3af; font-size: 0.9rem;">Skills Match:</span>
                     <span style="color: #f3f4f6; font-weight: 600;">{skills_matched} / {skills_total}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
+                    <span style="color: #9ca3af; font-size: 0.9rem;">Project Score:</span>
+                    <span style="color: #f3f4f6; font-weight: 600;">{cand['project_score'] * 100:.1f}% ({cand['project_details'].get('project_count', 0)} Projs)</span>
                 </div>
                 <div style="
                     text-align: center;
@@ -871,6 +902,32 @@ if st.session_state.pipeline_run:
                 else:
                     st.success("✅ Perfect tech-stack coverage. No skill gaps identified!")
                     
+                # Projects Analysis Breakdown
+                st.markdown("##### 📁 Project Integration & Complexity")
+                proj_details = res.get("project_details", {})
+                proj_score = res.get("project_score", 0.0)
+                proj_count = proj_details.get("project_count", 0)
+                proj_skills = proj_details.get("integrated_skills", [])
+                complexity_val = proj_details.get("complexity_score", 0.0)
+                
+                # Complexity rating
+                if complexity_val >= 0.7:
+                    complexity_badge = '<span style="color:#10b981; font-weight:700;">💎 High Complexity (Architecture, Cloud, APIs, Optimization)</span>'
+                elif complexity_val >= 0.4:
+                    complexity_badge = '<span style="color:#f59e0b; font-weight:700;">⚙️ Medium Complexity (Database, APIs, or Models)</span>'
+                else:
+                    complexity_badge = '<span style="color:#9ca3af; font-weight:600;">📁 Low Complexity (Basic scripts / static projects)</span>'
+                
+                st.write(f"**Project Score:** `{proj_score * 100:.1f}%`")
+                st.write(f"**Project Count:** `{proj_count}` projects detected")
+                st.write(f"**Complexity Rating:** {complexity_badge}", unsafe_allow_html=True)
+                
+                if proj_skills:
+                    st.write("**Skills Integrated in Projects:**")
+                    proj_skills_html = "".join([f'<span class="badge-matched" style="background: rgba(99, 102, 241, 0.12); color: #818cf8; border-color: rgba(99, 102, 241, 0.3);">{s}</span>' for s in proj_skills])
+                    st.markdown(proj_skills_html, unsafe_allow_html=True)
+                else:
+                    st.caption("No target skills detected in the project descriptions.")
             st.divider()
             st.markdown("##### 📑 Extracted Document Text Preview (Scroll to view full resume)")
             st.text_area(

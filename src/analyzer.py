@@ -364,6 +364,105 @@ def extract_metadata(text):
         "candidate_name": extract_name(text)
     }
 
+def analyze_projects(text, jd_skills):
+    """
+    Extracts and evaluates the candidate's projects.
+    Returns:
+        - project_score: float (0.0 to 1.0)
+        - project_details: dict containing count, integrated_skills, complexity_score
+    """
+    text_lower = text.lower()
+    
+    # 1. Extract Projects section (heuristic)
+    projects_section = ""
+    lines = text.split('\n')
+    in_projects = False
+    project_lines = []
+    
+    major_headers = [
+        "education", "skills", "experience", "work history", "certifications", 
+        "hobbies", "contact", "summary", "profile", "objective", "languages", 
+        "references", "activities", "leadership", "achievements", "publications", 
+        "interests", "declaration", "additional information"
+    ]
+    
+    for line in lines:
+        line_strip = line.strip()
+        if not line_strip:
+            continue
+        line_lower = line_strip.lower()
+        
+        # Check if we entered the projects section
+        if any(h in line_lower for h in ["key projects", "personal projects", "academic projects", "professional projects", "projects:"]):
+            in_projects = True
+            continue
+        elif line_lower == "projects" or line_lower == "selected projects":
+            in_projects = True
+            continue
+            
+        # Check if we exited the projects section
+        if in_projects and any(line_lower.startswith(h) or line_lower == h for h in major_headers):
+            in_projects = False
+            
+        if in_projects:
+            project_lines.append(line_strip)
+            
+    projects_section = "\n".join(project_lines)
+    
+    # Fallback to searching the whole text if no section found, focusing on lines with project keywords
+    if not projects_section.strip():
+        project_keywords = ["developed", "built", "implemented", "designed", "created", "engineered", "integrated", "deployment"]
+        fallback_lines = [line for line in lines if any(kw in line.lower() for kw in project_keywords)]
+        projects_section = "\n".join(fallback_lines)
+        
+    # 2. Count projects based on action verbs
+    action_verbs = [r'\bdeveloped\b', r'\bbuilt\b', r'\bimplemented\b', r'\bdesigned\b', r'\bcreated\b', r'\bengineered\b', r'\bdeployed\b']
+    project_count = 0
+    
+    sentences = re.split(r'[.!?\n]', projects_section.lower())
+    for s in sentences:
+        s_strip = s.strip()
+        if s_strip and any(re.search(v, s_strip) for v in action_verbs):
+            project_count += 1
+            
+    if project_count == 0 and len(projects_section.strip()) > 50:
+        project_count = 1
+    project_count = min(3, project_count)
+    count_score = project_count / 3.0
+    
+    # 3. JD Skills integration inside the projects section
+    matched_project_skills = []
+    for skill in jd_skills:
+        skill_clean = skill.replace('\\', '')
+        pattern = r'\b' + re.escape(skill_clean.lower()) + r'\b'
+        if re.search(pattern, projects_section.lower()):
+            matched_project_skills.append(skill_clean)
+            
+    # Capped relative match: matching 3 core skills in projects gives a full 100% skills integration credit
+    skills_score = min(1.0, len(matched_project_skills) / 3.0) if jd_skills else 1.0
+    
+    # 4. Complexity & Integration Keywords (databases, cloud, API, deployment)
+    complexity_keywords = [
+        "integrate", "integrated", "integration", "pipeline", "deploy", "deployed", "deployment", 
+        "api", "apis", "database", "db", "sql", "nosql", "cloud", "aws", "gcp", "azure", 
+        "docker", "kubernetes", "model", "architecture", "scale", "optimize", "optimized", 
+        "real-time", "microservices", "frontend", "backend", "full-stack", "ci/cd", 
+        "testing", "security", "framework", "performance"
+    ]
+    complexity_matches = [kw for kw in complexity_keywords if kw in projects_section.lower()]
+    complexity_score = min(1.0, len(complexity_matches) / 5.0) # max score at 5+ complexity keywords
+    
+    # Combine scores: 30% project count, 40% skills integration, 30% complexity/tool integration
+    project_score = (0.30 * count_score) + (0.40 * skills_score) + (0.30 * complexity_score)
+    project_score = max(0.0, min(1.0, project_score))
+    
+    return project_score, {
+        "project_count": project_count,
+        "integrated_skills": matched_project_skills,
+        "complexity_score": complexity_score,
+        "project_text_len": len(projects_section)
+    }
+
 def analyze_candidate(raw_text, jd_text):
     """
     Main entry point for candidate analysis.
@@ -397,7 +496,12 @@ def analyze_candidate(raw_text, jd_text):
     meta["total_jd_skills_count"] = len(jd_skills)
     meta["skill_match_ratio"] = len(matched_skills) / len(jd_skills) if jd_skills else 1.0
     
-    # 6. Resume Validation Check
+    # 6. Projects Analysis
+    project_score, project_details = analyze_projects(raw_text, jd_skills)
+    meta["project_score"] = project_score
+    meta["project_details"] = project_details
+    
+    # 7. Resume Validation Check
     is_resume, resume_validation_reason = check_is_resume(
         raw_text, meta["skills"], meta["experience"], meta["email"], meta["phone"]
     )

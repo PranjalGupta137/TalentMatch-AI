@@ -58,7 +58,7 @@ def get_similarity_score(vec1, vec2):
         logger.error(f"Manhattan similarity failed: {str(e)}")
         raise RuntimeError(f"All similarity computations failed: {str(e)}")
 
-def generate_feedback(base_score, skill_ratio, exp_weight, matched_skills, missing_skills, cand_exp, req_exp, is_gated, padding_penalty, flagged_kws, is_resume=True, resume_validation_reason="", gate_threshold=0.30):
+def generate_feedback(base_score, skill_ratio, exp_weight, matched_skills, missing_skills, cand_exp, req_exp, is_gated, padding_penalty, flagged_kws, is_resume=True, resume_validation_reason="", gate_threshold=0.30, project_score=0.0, project_details=None):
     """Generates detailed explainable feedback including security warnings and threshold gates."""
     reasons = []
     
@@ -97,6 +97,17 @@ def generate_feedback(base_score, skill_ratio, exp_weight, matched_skills, missi
             else:
                 reasons.append("No overlapping technical skills identified.")
                 
+        # Project match evaluation
+        if project_details:
+            cnt = project_details.get("project_count", 0)
+            int_skills = project_details.get("integrated_skills", [])
+            if project_score >= 0.70:
+                reasons.append(f"Demonstrates high-quality projects ({cnt} found) integrating core required tools ({', '.join(int_skills[:3])}) with strong architectural complexity.")
+            elif project_score >= 0.40:
+                reasons.append(f"Includes relevant project work ({cnt} projects) implementing required skills like {', '.join(int_skills[:2]) if int_skills else 'technologies'}.")
+            else:
+                reasons.append("Contains limited or basic project documentation in target technologies.")
+                
     # 2. Security Warnings
     if padding_penalty:
         reasons.append(f"WARNING: Suspected Resume Padding Violation detected (Excessive keyword stuffing of: {', '.join(flagged_kws)}). A 25% score penalty has been applied.")
@@ -106,8 +117,8 @@ def generate_feedback(base_score, skill_ratio, exp_weight, matched_skills, missi
 def rank_candidates(jd_embedding, candidate_embeddings, candidate_metadatas, jd_metadata, gate_threshold=0.30):
     """
     Ranks candidates using gated mathematical scoring rules:
-    - If base similarity < gate_threshold: Gated/Mismatched Profile, experience and skill weights set to 0.
-    - If base similarity >= gate_threshold: Score = 0.60*Semantic + 0.25*SkillRatio + 0.15*ExpWeight.
+    - If base similarity < gate_threshold: Gated/Mismatched Profile, experience, skill, and project weights set to 0.
+    - If base similarity >= gate_threshold: Score = 0.50*Semantic + 0.20*SkillRatio + 0.15*ExpWeight + 0.15*ProjectScore.
     - If padding_penalty_applied is True: Multiply final score by 0.75 (25% penalty).
     """
     ranked_list = []
@@ -125,6 +136,10 @@ def rank_candidates(jd_embedding, candidate_embeddings, candidate_metadatas, jd_
         # Experience Weight
         cand_exp = cand_meta.get("experience", 0)
         
+        # Project Score
+        project_score = cand_meta.get("project_score", 0.0)
+        project_details = cand_meta.get("project_details", {"project_count": 0, "integrated_skills": [], "complexity_score": 0.0})
+        
         is_resume = cand_meta.get("is_resume", True)
         resume_validation_reason = cand_meta.get("resume_validation_reason", "")
         
@@ -134,10 +149,12 @@ def rank_candidates(jd_embedding, candidate_embeddings, candidate_metadatas, jd_
         if not is_resume:
             skill_ratio = 0.0
             exp_weight = 0.0
+            p_score = 0.0
             final_score = 0.0
         elif is_gated:
             skill_ratio = 0.0
             exp_weight = 0.0
+            p_score = 0.0
             # Force linear weights to 0, score depends solely on 0.60 * similarity
             final_score = 0.60 * base_score
         else:
@@ -146,7 +163,8 @@ def rank_candidates(jd_embedding, candidate_embeddings, candidate_metadatas, jd_
                 exp_weight = min(1.0, cand_exp / required_exp)
             else:
                 exp_weight = 1.0
-            final_score = (0.60 * base_score) + (0.25 * skill_ratio) + (0.15 * exp_weight)
+            p_score = project_score
+            final_score = (0.50 * base_score) + (0.20 * skill_ratio) + (0.15 * exp_weight) + (0.15 * p_score)
             
         # Check Security Padding Penalty
         padding_penalty = cand_meta.get("padding_penalty_applied", False)
@@ -163,7 +181,8 @@ def rank_candidates(jd_embedding, candidate_embeddings, candidate_metadatas, jd_
             matched_skills, missing_skills, cand_exp, required_exp, 
             is_gated, padding_penalty, flagged_kws,
             is_resume=is_resume, resume_validation_reason=resume_validation_reason,
-            gate_threshold=gate_threshold
+            gate_threshold=gate_threshold,
+            project_score=p_score, project_details=project_details
         )
         
         ranked_list.append({
@@ -172,6 +191,8 @@ def rank_candidates(jd_embedding, candidate_embeddings, candidate_metadatas, jd_
             "base_score": base_score,
             "skill_ratio": skill_ratio,
             "exp_weight": exp_weight,
+            "project_score": p_score,
+            "project_details": project_details,
             "final_score": final_score,
             "match_percentage": f"{final_score * 100:.1f}%",
             "experience": cand_exp,
@@ -212,6 +233,7 @@ def generate_explainable_dataframe(ranked_results):
             "Match Score (%)": res["match_percentage"],
             "Base Semantic Score": round(res["base_score"], 3),
             "Skill Matches": f"{len(res['matched_skills'])} / {len(res['matched_skills']) + len(res['missing_skills'])}",
+            "Project Score (%)": f"{res['project_score'] * 100:.1f}%",
             "Yrs Experience": res["experience"],
             "Security Status": status,
             "Feedback": res["feedback"]
