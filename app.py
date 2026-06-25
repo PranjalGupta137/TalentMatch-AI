@@ -584,7 +584,8 @@ if st.button("👑 Execute Sourcing & Hybrid Matching Engine"):
                     "successfully_parsed": len(valid_profiles),
                     "failed_parsed": len(failed_profiles),
                     "failed_list": [p["name"] for p in failed_profiles],
-                    "embedding_mode": embed_mode
+                    "embedding_mode": embed_mode,
+                    "processed_filenames": [f.name for f in uploaded_resumes] if uploaded_resumes else []
                 }
                 
                 progress_bar.progress(100)
@@ -604,6 +605,11 @@ if st.button("👑 Execute Sourcing & Hybrid Matching Engine"):
 
 # Display Results Dashboard
 if st.session_state.pipeline_run:
+    # Check if the list of currently uploaded resumes has changed from the processed set
+    current_filenames = set(f.name for f in uploaded_resumes) if uploaded_resumes else set()
+    processed_filenames = set(st.session_state.diagnostics.get('processed_filenames', []))
+    if current_filenames != processed_filenames:
+        st.warning("⚠️ **File Queue Changed:** The list of uploaded resumes has changed. Please click the **👑 Execute Sourcing & Hybrid Matching Engine** button above to update the results for all candidates.")
     # Dynamic re-ranking based on current gate_threshold slider
     results = rank_candidates(
         st.session_state.jd_emb,
